@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                  id="spinDefinitions" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="spin" isExecutable="true" camunda:historyTimeToLive="1">
+    <bpmn:startEvent id="start" />
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="parse" />
+    <bpmn:scriptTask id="parse" scriptFormat="python">
+      <bpmn:script><![CDATA[
+customer = S(payload, 'application/json')
+execution.setVariable('customerName', customer.prop('name').stringValue())
+execution.setVariable('itemCount', JSON(payload).prop('items').elements().size())
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f2" sourceRef="parse" targetRef="wait" />
+    <bpmn:userTask id="wait" />
+  </bpmn:process>
+</bpmn:definitions>

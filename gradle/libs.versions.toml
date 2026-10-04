@@ -1,0 +1,21 @@
+[versions]
+graalpy = "25.4.4.1.1"
+cibseven = "2.2.0"
+junit = "6.1.3"
+assertj = "3.27.7"
+h2 = "2.5.252"
+slf4j = "2.0.17"
+
+[libraries]
+graalpy-polyglot = { module = "org.graalvm.polyglot:polyglot", version.ref = "graalpy" }
+graalpy-python = { module = "org.graalvm.polyglot:python-community", version.ref = "graalpy" }
+cibseven-engine = { module = "org.cibseven.bpm:cibseven-engine", version.ref = "cibseven" }
+h2 = { module = "com.h2database:h2", version.ref = "h2" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-launcher = { module = "org.junit.platform:junit-platform-launcher" }
+assertj = { module = "org.assertj:assertj-core", version.ref = "assertj" }
+cibseven-spin-core = { module = "org.cibseven.spin:cibseven-spin-core", version.ref = "cibseven" }
+cibseven-spin-plugin = { module = "org.cibseven.bpm:cibseven-engine-plugin-spin", version.ref = "cibseven" }
+cibseven-spin-json = { module = "org.cibseven.spin:cibseven-spin-dataformat-json-jackson", version.ref = "cibseven" }

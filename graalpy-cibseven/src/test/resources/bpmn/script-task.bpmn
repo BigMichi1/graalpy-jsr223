@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                  id="scriptTaskDefinitions" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:process id="scriptTask" isExecutable="true" camunda:historyTimeToLive="1">
+    <bpmn:startEvent id="start">
+      <bpmn:extensionElements>
+        <camunda:executionListener event="start">
+          <camunda:script scriptFormat="python">execution.setVariable('listenerRan', True)</camunda:script>
+        </camunda:executionListener>
+      </bpmn:extensionElements>
+    </bpmn:startEvent>
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="sum" />
+    <bpmn:scriptTask id="sum" scriptFormat="python" camunda:resultVariable="sum">
+      <bpmn:script>a + b</bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f2" sourceRef="sum" targetRef="enrich" />
+    <bpmn:scriptTask id="enrich" scriptFormat="python">
+      <bpmn:script><![CDATA[
+import json
+
+def describe(value):
+    return {'value': value, 'even': value % 2 == 0}
+
+execution.setVariable('doubled', sum * 2)
+execution.setVariable('description', json.dumps(describe(sum), sort_keys=True))
+local_only = 'not a process variable'
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:sequenceFlow id="f3" sourceRef="enrich" targetRef="mapped" />
+    <bpmn:task id="mapped">
+      <bpmn:extensionElements>
+        <camunda:inputOutput>
+          <camunda:inputParameter name="greeting">
+            <camunda:script scriptFormat="python">'Hello ' + name.upper()</camunda:script>
+          </camunda:inputParameter>
+          <camunda:outputParameter name="greetingOut">
+            <camunda:script scriptFormat="graalpy">greeting + '!'</camunda:script>
+          </camunda:outputParameter>
+        </camunda:inputOutput>
+      </bpmn:extensionElements>
+    </bpmn:task>
+    <bpmn:sequenceFlow id="f4" sourceRef="mapped" targetRef="decide" />
+    <bpmn:exclusiveGateway id="decide" />
+    <bpmn:sequenceFlow id="toBig" sourceRef="decide" targetRef="big">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="python"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">doubled &gt; 10</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:sequenceFlow id="toSmall" sourceRef="decide" targetRef="small">
+      <bpmn:conditionExpression xsi:type="bpmn:tFormalExpression" language="python"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">doubled &lt;= 10</bpmn:conditionExpression>
+    </bpmn:sequenceFlow>
+    <bpmn:userTask id="big" />
+    <bpmn:userTask id="small" />
+  </bpmn:process>
+</bpmn:definitions>

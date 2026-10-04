@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="https://www.omg.org/spec/DMN/20191111/MODEL/" id="riskDefinitions" name="Risk"
+             namespace="http://camunda.org/schema/1.0/dmn">
+  <decision id="risk" name="Risk">
+    <decisionTable id="riskTable" hitPolicy="FIRST">
+      <input id="totalInput" label="Total">
+        <inputExpression id="totalExpression" typeRef="integer" expressionLanguage="python">
+          <text>amount * quantity</text>
+        </inputExpression>
+      </input>
+      <output id="levelOutput" name="level" typeRef="string" />
+      <rule id="high">
+        <inputEntry id="highEntry" expressionLanguage="python"><text>cellInput &gt;= 1000</text></inputEntry>
+        <outputEntry id="highOutput" expressionLanguage="python"><text>'HIGH'</text></outputEntry>
+      </rule>
+      <rule id="low">
+        <inputEntry id="lowEntry"><text>-</text></inputEntry>
+        <outputEntry id="lowOutput" expressionLanguage="python"><text>'LOW-' + str(amount)</text></outputEntry>
+      </rule>
+    </decisionTable>
+  </decision>
+</definitions>

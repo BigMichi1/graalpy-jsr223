@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<bpmn:definitions xmlns:bpmn="http://www.omg.org/spec/BPMN/20100524/MODEL"
+                  xmlns:camunda="http://camunda.org/schema/1.0/bpmn"
+                  id="errorDefinitions" targetNamespace="http://bpmn.io/schema/bpmn">
+  <bpmn:error id="rejected" errorCode="REJECTED" />
+  <bpmn:process id="bpmnError" isExecutable="true" camunda:historyTimeToLive="1">
+    <bpmn:startEvent id="start" />
+    <bpmn:sequenceFlow id="f1" sourceRef="start" targetRef="validate" />
+    <bpmn:scriptTask id="validate" scriptFormat="python">
+      <bpmn:script><![CDATA[
+import java
+BpmnError = java.type('org.cibseven.bpm.engine.delegate.BpmnError')
+if amount < 0:
+    raise BpmnError('REJECTED', 'negative amount')
+]]></bpmn:script>
+    </bpmn:scriptTask>
+    <bpmn:boundaryEvent id="onRejected" attachedToRef="validate">
+      <bpmn:errorEventDefinition errorRef="rejected" />
+    </bpmn:boundaryEvent>
+    <bpmn:sequenceFlow id="f2" sourceRef="validate" targetRef="accepted" />
+    <bpmn:userTask id="accepted" />
+    <bpmn:sequenceFlow id="f3" sourceRef="onRejected" targetRef="rejectedTask" />
+    <bpmn:userTask id="rejectedTask" />
+  </bpmn:process>
+</bpmn:definitions>
