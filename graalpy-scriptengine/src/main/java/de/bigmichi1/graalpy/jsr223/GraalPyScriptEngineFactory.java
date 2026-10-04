@@ -4,10 +4,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
-
 import javax.script.ScriptEngine;
 import javax.script.ScriptEngineFactory;
-
 import org.graalvm.polyglot.Engine;
 
 /**
@@ -43,7 +41,7 @@ public final class GraalPyScriptEngineFactory implements ScriptEngineFactory, Au
         this(GraalPyEngineOptions.fromSystemProperties());
     }
 
-    public GraalPyScriptEngineFactory(GraalPyEngineOptions options) {
+    public GraalPyScriptEngineFactory(final GraalPyEngineOptions options) {
         this.options = Objects.requireNonNull(options, "options");
     }
 
@@ -87,7 +85,7 @@ public final class GraalPyScriptEngineFactory implements ScriptEngineFactory, Au
     }
 
     @Override
-    public Object getParameter(String key) {
+    public Object getParameter(final String key) {
         return switch (key) {
             case ScriptEngine.ENGINE -> getEngineName();
             case ScriptEngine.ENGINE_VERSION -> getEngineVersion();
@@ -100,17 +98,17 @@ public final class GraalPyScriptEngineFactory implements ScriptEngineFactory, Au
     }
 
     @Override
-    public String getMethodCallSyntax(String obj, String method, String... args) {
+    public String getMethodCallSyntax(final String obj, final String method, final String... args) {
         return obj + "." + method + "(" + String.join(", ", args) + ")";
     }
 
     @Override
-    public String getOutputStatement(String toDisplay) {
+    public String getOutputStatement(final String toDisplay) {
         return "print(" + pythonStringLiteral(toDisplay) + ")";
     }
 
     @Override
-    public String getProgram(String... statements) {
+    public String getProgram(final String... statements) {
         return String.join("\n", statements) + "\n";
     }
 
@@ -119,14 +117,17 @@ public final class GraalPyScriptEngineFactory implements ScriptEngineFactory, Au
         return new GraalPyScriptEngine(this, pool(), options.writeBack());
     }
 
-    /** Closes all pooled contexts and the shared polyglot engine. Engines created earlier stop working. */
+    /**
+     * Closes the pooled contexts and the shared polyglot engine. Evaluations already running finish;
+     * later ones on engines from this factory fail with {@link IllegalStateException}.
+     */
     @Override
     public synchronized void close() {
         closed = true;
         if (pool != null) {
+            // The pool owns the engine from here: evaluations still running finish first.
             pool.close();
-        }
-        if (engine != null) {
+        } else if (engine != null) {
             engine.close();
         }
     }
@@ -163,28 +164,31 @@ public final class GraalPyScriptEngineFactory implements ScriptEngineFactory, Au
     }
 
     private Engine createEngine() {
-        Engine.Builder builder = Engine.newBuilder(LANGUAGE_ID);
-        Map<String, String> polyglotOptions = options.polyglotOptions();
+        final Engine.Builder builder = Engine.newBuilder(LANGUAGE_ID);
+        final Map<String, String> polyglotOptions = options.polyglotOptions();
         // Running on a stock JDK falls back to the Truffle interpreter. That is a supported mode, so
         // don't print a warning per engine unless explicitly asked for.
-        if (!polyglotOptions.containsKey(WARN_INTERPRETER_ONLY)
-                && System.getProperty("polyglot." + WARN_INTERPRETER_ONLY) == null) {
+        if (!polyglotOptions.containsKey(WARN_INTERPRETER_ONLY) && System.getProperty("polyglot." + WARN_INTERPRETER_ONLY) == null) {
             builder.option(WARN_INTERPRETER_ONLY, "false");
         }
         builder.options(polyglotOptions);
         return builder.build();
     }
 
-    private static String pythonStringLiteral(String text) {
-        return text.codePoints()
-                .mapToObj(cp -> switch (cp) {
-                    case '\\' -> "\\\\";
-                    case '"' -> "\\\"";
-                    case '\n' -> "\\n";
-                    case '\r' -> "\\r";
-                    case '\t' -> "\\t";
-                    default -> cp < 0x20 ? String.format("\\x%02x", cp) : Character.toString(cp);
-                })
-                .collect(Collectors.joining("", "\"", "\""));
+    private static String pythonStringLiteral(final String text) {
+        return text
+            .codePoints()
+            .mapToObj(
+                cp ->
+                    switch (cp) {
+                        case '\\' -> "\\\\";
+                        case '"' -> "\\\"";
+                        case '\n' -> "\\n";
+                        case '\r' -> "\\r";
+                        case '\t' -> "\\t";
+                        default -> cp < 0x20 ? String.format("\\x%02x", cp) : Character.toString(cp);
+                    }
+            )
+            .collect(Collectors.joining("", "\"", "\""));
     }
 }

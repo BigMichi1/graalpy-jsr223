@@ -9,7 +9,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.function.Predicate;
-
 import org.graalvm.polyglot.HostAccess;
 
 /**
@@ -66,7 +65,7 @@ public final class GraalPyEngineOptions {
 
         private final HostAccess hostAccess;
 
-        HostAccessPolicy(HostAccess hostAccess) {
+        HostAccessPolicy(final HostAccess hostAccess) {
             this.hostAccess = hostAccess;
         }
 
@@ -86,7 +85,7 @@ public final class GraalPyEngineOptions {
     private final boolean writeBack;
     private final Map<String, String> polyglotOptions;
 
-    private GraalPyEngineOptions(Builder builder) {
+    private GraalPyEngineOptions(final Builder builder) {
         this.hostAccess = builder.hostAccess;
         this.hostClassFilter = builder.hostClassFilter;
         this.allowIO = builder.allowIO;
@@ -110,8 +109,8 @@ public final class GraalPyEngineOptions {
     }
 
     /** Returns the defaults, overridden by {@code graalpy.jsr223.*} entries of {@code properties}. */
-    public static GraalPyEngineOptions fromProperties(Properties properties) {
-        Builder builder = builder();
+    public static GraalPyEngineOptions fromProperties(final Properties properties) {
+        final Builder builder = builder();
         String value;
         if ((value = properties.getProperty(PREFIX + "hostAccess")) != null) {
             builder.hostAccess(HostAccessPolicy.valueOf(value.trim().toUpperCase(Locale.ROOT)));
@@ -140,7 +139,7 @@ public final class GraalPyEngineOptions {
         if ((value = properties.getProperty(PREFIX + "writeBack")) != null) {
             builder.writeBack(Boolean.parseBoolean(value.trim()));
         }
-        for (String name : properties.stringPropertyNames()) {
+        for (final String name : properties.stringPropertyNames()) {
             if (name.startsWith(OPTION_PREFIX)) {
                 builder.polyglotOption(name.substring(OPTION_PREFIX.length()), properties.getProperty(name));
             }
@@ -190,6 +189,7 @@ public final class GraalPyEngineOptions {
 
     /** Builder for {@link GraalPyEngineOptions}. */
     public static final class Builder {
+
         private HostAccessPolicy hostAccess = HostAccessPolicy.ALL;
         private Predicate<String> hostClassFilter = className -> true;
         private boolean allowIO;
@@ -201,16 +201,15 @@ public final class GraalPyEngineOptions {
         private boolean writeBack = true;
         private final Map<String, String> polyglotOptions = new LinkedHashMap<>();
 
-        private Builder() {
-        }
+        private Builder() {}
 
-        public Builder hostAccess(HostAccessPolicy hostAccess) {
+        public Builder hostAccess(final HostAccessPolicy hostAccess) {
             this.hostAccess = Objects.requireNonNull(hostAccess, "hostAccess");
             return this;
         }
 
         /** Restricts {@code java.type(...)} to classes accepted by {@code filter}. */
-        public Builder hostClassFilter(Predicate<String> filter) {
+        public Builder hostClassFilter(final Predicate<String> filter) {
             this.hostClassFilter = Objects.requireNonNull(filter, "filter");
             return this;
         }
@@ -219,37 +218,37 @@ public final class GraalPyEngineOptions {
          * Configures class lookup from a textual spec: {@code *} allows every class, an empty
          * string none, anything else is a comma separated list of class name prefixes.
          */
-        public Builder hostClassLookup(String spec) {
-            String trimmed = spec.trim();
+        public Builder hostClassLookup(final String spec) {
+            final String trimmed = spec.trim();
             if (trimmed.equals("*")) {
                 return hostClassFilter(className -> true);
             }
             if (trimmed.isEmpty()) {
                 return hostClassFilter(className -> false);
             }
-            List<String> prefixes = Arrays.stream(trimmed.split(","))
-                    .map(String::trim)
-                    .filter(prefix -> !prefix.isEmpty())
-                    .toList();
+            final List<String> prefixes = Arrays.stream(trimmed.split(","))
+                .map(String::trim)
+                .filter(prefix -> !prefix.isEmpty())
+                .toList();
             return hostClassFilter(className -> prefixes.stream().anyMatch(className::startsWith));
         }
 
-        public Builder allowIO(boolean allowIO) {
+        public Builder allowIO(final boolean allowIO) {
             this.allowIO = allowIO;
             return this;
         }
 
-        public Builder allowCreateThread(boolean allowCreateThread) {
+        public Builder allowCreateThread(final boolean allowCreateThread) {
             this.allowCreateThread = allowCreateThread;
             return this;
         }
 
-        public Builder allowNativeAccess(boolean allowNativeAccess) {
+        public Builder allowNativeAccess(final boolean allowNativeAccess) {
             this.allowNativeAccess = allowNativeAccess;
             return this;
         }
 
-        public Builder maxIdleContexts(int maxIdleContexts) {
+        public Builder maxIdleContexts(final int maxIdleContexts) {
             if (maxIdleContexts < 0) {
                 throw new IllegalArgumentException("maxIdleContexts must be >= 0");
             }
@@ -257,7 +256,7 @@ public final class GraalPyEngineOptions {
             return this;
         }
 
-        public Builder maxEvaluationsPerContext(int maxEvaluationsPerContext) {
+        public Builder maxEvaluationsPerContext(final int maxEvaluationsPerContext) {
             if (maxEvaluationsPerContext < 0) {
                 throw new IllegalArgumentException("maxEvaluationsPerContext must be >= 0");
             }
@@ -265,7 +264,7 @@ public final class GraalPyEngineOptions {
             return this;
         }
 
-        public Builder compilationCacheSize(int compilationCacheSize) {
+        public Builder compilationCacheSize(final int compilationCacheSize) {
             if (compilationCacheSize < 0) {
                 throw new IllegalArgumentException("compilationCacheSize must be >= 0");
             }
@@ -273,13 +272,13 @@ public final class GraalPyEngineOptions {
             return this;
         }
 
-        public Builder writeBack(boolean writeBack) {
+        public Builder writeBack(final boolean writeBack) {
             this.writeBack = writeBack;
             return this;
         }
 
         /** Adds a raw polyglot context option such as {@code python.PythonPath}. */
-        public Builder polyglotOption(String name, String value) {
+        public Builder polyglotOption(final String name, final String value) {
             polyglotOptions.put(Objects.requireNonNull(name, "name"), Objects.requireNonNull(value, "value"));
             return this;
         }

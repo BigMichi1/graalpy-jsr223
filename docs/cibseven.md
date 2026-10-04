@@ -31,14 +31,17 @@ The engine itself needs no plugin. CIB seven's `DefaultScriptEngineResolver` fin
 
 ## What the plugin does
 
-CIB seven runs *environment scripts* for a language before every script of that language. Spin
+CIB seven runs _environment scripts_ for a language before every script of that language. Spin
 registers `script/env/python/spin.py` for `python`, and that script is Jython code
 (`import org.cibseven.spin.Spin.S as S`) which fails on GraalPy. Even for
 `scriptFormat="graalpy"`, CIB seven falls back to the factory's language name (`python`) when
 looking up environment scripts.
 
-The plugin acts in `postProcessEngineBuild`, after every plugin has registered its resolvers, so
-plugin order does not matter:
+The plugin acts in `postInit` and again in `postProcessEngineBuild`, so it also catches a Spin
+plugin registered after it (Spin adds its resolver in its own `postInit`). Register it after Spin's
+plugin when the job executor starts with the engine: a Python job run between the two hooks would
+still see Spin's Jython script. If Spin is on the classpath but cannot be loaded, the engine fails to
+start rather than silently running Python scripts without `S`.
 
 - It wraps Spin's resolver so that it returns nothing for the GraalPy names (`python`, `graalpy`,
   `python3`, `py`). Other languages are unaffected.
@@ -49,7 +52,7 @@ plugin order does not matter:
 
 ## Where Python can be used
 
-Each example below is covered by the integration tests in `graalpy-cibseven/src/test`.
+Each example below is covered by `CibSevenIntegrationTest`.
 
 ### Script task with result variable
 
@@ -138,14 +141,14 @@ not passed as `ScriptEngine.FILENAME` by CIB seven, so tracebacks show `<script>
 
 ## Migration notes from Jython
 
-| Jython | GraalPy |
-|---|---|
-| `print "x"` | `print("x")` |
+| Jython                                                   | GraalPy                                                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `print "x"`                                              | `print("x")`                                                                                                                          |
 | `from org.cibseven.bpm.engine.delegate import BpmnError` | `BpmnError = java.type('org.cibseven.bpm.engine.delegate.BpmnError')` (or enable `-Dgraalpy.jsr223.option.python.EmulateJython=true`) |
-| `from java.util import ArrayList` | works unchanged (`java.*` packages) |
-| `unicode`, `long`, `xrange`, `dict.iteritems()` | `str`, `int`, `range`, `dict.items()` |
-| `5 / 2 == 2` | `5 / 2 == 2.5`, use `//` for integer division |
-| functions and imported modules end up in bindings | not written back; only data is |
+| `from java.util import ArrayList`                        | works unchanged (`java.*` packages)                                                                                                   |
+| `unicode`, `long`, `xrange`, `dict.iteritems()`          | `str`, `int`, `range`, `dict.items()`                                                                                                 |
+| `5 / 2 == 2`                                             | `5 / 2 == 2.5`, use `//` for integer division                                                                                         |
+| functions and imported modules end up in bindings        | not written back; only data is                                                                                                        |
 
 ## Operational notes
 
@@ -155,4 +158,4 @@ not passed as `ScriptEngine.FILENAME` by CIB seven, so tracebacks show `<script>
   the same time (job executor threads plus request threads).
 - **Performance.** Run on a GraalVM JDK for JIT-compiled Python. On other JDKs GraalPy uses
   interpreter mode.
-- **JVM flags (JDK 24+).** Add `--enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow`.
+- **JVM flags.** On the current JDK, add `--enable-native-access=ALL-UNNAMED --sun-misc-unsafe-memory-access=allow`.

@@ -9,7 +9,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
 import org.graalvm.polyglot.Value;
 
 /**
@@ -45,21 +44,51 @@ final class ValueConverter {
     /** Guards against self-referencing containers. */
     private static final int MAX_DEPTH = 64;
 
-    private ValueConverter() {
+    /**
+     * Upper bound of values visited by one conversion. A list holding itself twice would otherwise
+     * take 2^64 steps before {@link #MAX_DEPTH} stops it.
+     */
+    private static final int MAX_NODES = 1_000_000;
+
+    private ValueConverter() {}
+
+    static Object toJava(final Value value) {
+        return toJava(value, 0, new int[] { MAX_NODES });
     }
 
-    static Object toJava(Value value) {
-        return toJava(value, 0);
+    /**
+     * Whether a converted value still holds a polyglot {@link Value}, at the top or nested in a
+     * container. Such a value belongs to the pooled context that produced it and must not be stored
+     * by the caller.
+     */
+    static boolean containsGuestValue(final Object converted) {
+        if (converted instanceof Value) {
+            return true;
+        }
+        if (converted instanceof final Map<?, ?> map) {
+            return map
+                .entrySet()
+                .stream()
+                .anyMatch(entry -> containsGuestValue(entry.getKey()) || containsGuestValue(entry.getValue()));
+        }
+        if (converted instanceof final Iterable<?> iterable) {
+            for (final Object element : iterable) {
+                if (containsGuestValue(element)) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
-    private static Object toJava(Value value, int depth) {
+    private static Object toJava(final Value value, final int depth, final int[] budget) {
         if (value == null || value.isNull()) {
             return null;
         }
         if (value.isHostObject()) {
             try {
                 return value.asHostObject();
-            } catch (UnsupportedOperationException e) {
+            } catch (final UnsupportedOperationException e) {
                 // Host members such as bound methods have no Java object representation.
                 return value;
             }
@@ -82,78 +111,73 @@ final class ValueConverter {
         if (value.isDuration()) {
             return value.asDuration();
         }
-        if (depth >= MAX_DEPTH) {
+        if (depth >= MAX_DEPTH || --budget[0] < 0) {
             return value;
         }
         if (value.hasBufferElements()) {
-            byte[] bytes = new byte[Math.toIntExact(value.getBufferSize())];
+            final byte[] bytes = new byte[Math.toIntExact(value.getBufferSize())];
             value.readBuffer(0, bytes, 0, bytes.length);
             return bytes;
         }
         if (value.hasHashEntries()) {
-            Map<Object, Object> map = new LinkedHashMap<>();
-            Value iterator = value.getHashEntriesIterator();
+            final Map<Object, Object> map = new LinkedHashMap<>();
+            final Value iterator = value.getHashEntriesIterator();
             while (iterator.hasIteratorNextElement()) {
-                Value entry = iterator.getIteratorNextElement();
-                map.put(toJava(entry.getArrayElement(0), depth + 1), toJava(entry.getArrayElement(1), depth + 1));
+                final Value entry = iterator.getIteratorNextElement();
+                map.put(toJava(entry.getArrayElement(0), depth + 1, budget), toJava(entry.getArrayElement(1), depth + 1, budget));
             }
             return map;
         }
         if (value.hasArrayElements()) {
-            long size = value.getArraySize();
-            List<Object> list = new ArrayList<>((int) Math.min(size, Integer.MAX_VALUE));
+            final long size = value.getArraySize();
+            final List<Object> list = new ArrayList<>((int) Math.min(size, Integer.MAX_VALUE));
             for (long i = 0; i < size; i++) {
-                list.add(toJava(value.getArrayElement(i), depth + 1));
+                list.add(toJava(value.getArrayElement(i), depth + 1, budget));
             }
             return list;
         }
         if (value.hasIterator() && isSet(value)) {
-            Set<Object> set = new LinkedHashSet<>();
-            Value iterator = value.getIterator();
+            final Set<Object> set = new LinkedHashSet<>();
+            final Value iterator = value.getIterator();
             while (iterator.hasIteratorNextElement()) {
-                set.add(toJava(iterator.getIteratorNextElement(), depth + 1));
+                set.add(toJava(iterator.getIteratorNextElement(), depth + 1, budget));
             }
             return set;
         }
         return value;
     }
 
-    private static Object toNumber(Value value) {
+    private static Object toNumber(final Value value) {
         // Python floats with integral values (2.0) also "fit" into int; keep them floating point.
-        if (isFloat(value)) {
-            return value.asDouble();
-        }
-        if (value.fitsInInt()) {
-            return value.asInt();
-        }
-        if (value.fitsInLong()) {
-            return value.asLong();
-        }
-        if (value.fitsInBigInteger()) {
-            return value.as(BigInteger.class);
+        if (!isFloat(value)) {
+            if (value.fitsInInt()) {
+                return value.asInt();
+            }
+            if (value.fitsInLong()) {
+                return value.asLong();
+            }
+            if (value.fitsInBigInteger()) {
+                return value.as(BigInteger.class);
+            }
         }
         return value.asDouble();
     }
 
-    private static boolean isFloat(Value value) {
-        Value meta = value.getMetaObject();
+    private static boolean isFloat(final Value value) {
+        final Value meta = value.getMetaObject();
         return meta != null && "float".equals(meta.getMetaSimpleName());
     }
 
-    private static Object toTemporal(Value value) {
+    private static Object toTemporal(final Value value) {
         if (value.isDate() && value.isTime()) {
-            LocalDateTime dateTime = LocalDateTime.of(value.asDate(), value.asTime());
+            final LocalDateTime dateTime = LocalDateTime.of(value.asDate(), value.asTime());
             return value.isTimeZone() ? ZonedDateTime.of(dateTime, value.asTimeZone()) : dateTime;
         }
         return value.isDate() ? value.asDate() : value.asTime();
     }
 
-    private static boolean isSet(Value value) {
-        Value meta = value.getMetaObject();
-        if (meta == null) {
-            return false;
-        }
-        String name = meta.getMetaSimpleName();
-        return "set".equals(name) || "frozenset".equals(name);
+    private static boolean isSet(final Value value) {
+        final Value meta = value.getMetaObject();
+        return meta != null && ("set".equals(meta.getMetaSimpleName()) || "frozenset".equals(meta.getMetaSimpleName()));
     }
 }

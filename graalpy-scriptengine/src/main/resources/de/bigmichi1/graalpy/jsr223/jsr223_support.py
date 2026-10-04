@@ -9,6 +9,9 @@
 #       to look up those names in the javax.script bindings instead of copying every
 #       binding into Python.
 #
+#   flush()
+#       Flushes Python's stdout and stderr buffers into the redirected streams.
+#
 #   execute(prepared, keys, values, write_back) -> [has_result, result, changes]
 #       Runs the compiled script in a fresh module namespace seeded with the given
 #       bindings. `changes` is a flat [name, value, name, value, ...] list of the
@@ -89,6 +92,11 @@ def _compile(source, filename):
     return Prepared(code, tuple(names), has_result, filename)
 
 
+def _flush():
+    sys.stdout.flush()
+    sys.stderr.flush()
+
+
 def _is_writable(name, value):
     return not name.startswith("_") and not isinstance(value, _STRUCTURAL_TYPES)
 
@@ -119,11 +127,10 @@ def _make_api(cache_size):
             # exactly what the script saw.
             injected[key] = namespace[key]
 
-        try:
-            exec(prepared.code, namespace)
-        finally:
-            sys.stdout.flush()
-            sys.stderr.flush()
+        # No try/except here: GraalPy 25.4 fails to build the stack trace of an exception re-raised
+        # through a handler in this frame ("Bytecode index out of range"), losing the script's error.
+        # The Java side calls flush() afterwards instead.
+        exec(prepared.code, namespace)
 
         result = namespace.pop(RESULT_NAME, None)
 
@@ -139,7 +146,7 @@ def _make_api(cache_size):
 
         return [prepared.has_result, result, changes]
 
-    return {"prepare": prepare, "execute": execute}
+    return {"prepare": prepare, "execute": execute, "flush": _flush}
 
 
 _make_api

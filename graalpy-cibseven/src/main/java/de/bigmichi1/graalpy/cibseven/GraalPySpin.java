@@ -30,28 +30,26 @@ public final class GraalPySpin {
     /** {@code XML(input)} */
     public static final SpinFunction XML = arguments -> Spin.XML(single("XML", arguments));
 
-    private GraalPySpin() {
-    }
+    private GraalPySpin() {}
 
-    private static Object s(Object... arguments) {
+    private static Object s(final Object... arguments) {
         if (arguments.length == 1) {
             return Spin.S(arguments[0]);
         }
         if (arguments.length == 2) {
-            Object format = arguments[1];
-            if (format instanceof String name) {
+            final Object format = arguments[1];
+            if (format instanceof final String name) {
                 return Spin.S(arguments[0], name);
             }
-            if (format instanceof DataFormat<?> dataFormat) {
+            if (format instanceof final DataFormat<?> dataFormat) {
                 return Spin.S(arguments[0], dataFormat);
             }
-            throw new IllegalArgumentException("S(): second argument must be a data format name or "
-                    + DataFormats.class.getSimpleName() + " instance, got " + format);
+            throw new IllegalArgumentException("S(): second argument must be a data format name or " + DataFormats.class.getSimpleName() + " instance, got " + format);
         }
         throw new IllegalArgumentException("S() takes 1 or 2 arguments, got " + arguments.length);
     }
 
-    private static Object single(String function, Object... arguments) {
+    private static Object single(final String function, final Object... arguments) {
         if (arguments.length != 1) {
             throw new IllegalArgumentException(function + "() takes exactly 1 argument, got " + arguments.length);
         }

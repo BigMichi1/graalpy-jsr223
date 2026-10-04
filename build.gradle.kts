@@ -9,6 +9,36 @@ allprojects {
 
 subprojects {
     apply(plugin = "java-library")
+    apply(plugin = "jacoco")
+
+    extensions.configure<JacocoPluginExtension> {
+        toolVersion = rootProject.extensions.getByType<VersionCatalogsExtension>().named("libs")
+            .findVersion("jacoco").get().requiredVersion
+    }
+
+    // At least 90 % of lines covered by each module's own tests; `check` fails below that.
+    tasks.withType<JacocoCoverageVerification>().configureEach {
+        violationRules {
+            rule {
+                limit {
+                    counter = "LINE"
+                    minimum = "0.90".toBigDecimal()
+                }
+            }
+        }
+    }
+
+    tasks.withType<Test>().configureEach {
+        finalizedBy(tasks.withType<JacocoReport>())
+    }
+
+    tasks.withType<JacocoReport>().configureEach {
+        reports { xml.required = true }
+    }
+
+    tasks.named("check") {
+        dependsOn(tasks.withType<JacocoCoverageVerification>())
+    }
 
     extensions.configure<JavaPluginExtension> {
         withSourcesJar()

@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.List;
-
 import javax.script.AbstractScriptEngine;
 import javax.script.Bindings;
 import javax.script.Compilable;
@@ -14,10 +13,11 @@ import javax.script.ScriptEngine;
 import javax.script.ScriptEngineFactory;
 import javax.script.ScriptException;
 import javax.script.SimpleBindings;
-
 import org.graalvm.polyglot.PolyglotException;
 import org.graalvm.polyglot.SourceSection;
 import org.graalvm.polyglot.Value;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * JSR-223 script engine running Python 3 on GraalPy.
@@ -46,25 +46,27 @@ import org.graalvm.polyglot.Value;
  */
 public final class GraalPyScriptEngine extends AbstractScriptEngine implements Compilable {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(GraalPyScriptEngine.class);
+
     private static final String DEFAULT_FILENAME = "<script>";
 
     private final GraalPyScriptEngineFactory factory;
     private final ContextPool pool;
     private final boolean writeBack;
 
-    GraalPyScriptEngine(GraalPyScriptEngineFactory factory, ContextPool pool, boolean writeBack) {
+    GraalPyScriptEngine(final GraalPyScriptEngineFactory factory, final ContextPool pool, final boolean writeBack) {
         this.factory = factory;
         this.pool = pool;
         this.writeBack = writeBack;
     }
 
     @Override
-    public Object eval(String script, ScriptContext context) throws ScriptException {
+    public Object eval(final String script, final ScriptContext context) throws ScriptException {
         return evaluate(script, context);
     }
 
     @Override
-    public Object eval(Reader reader, ScriptContext context) throws ScriptException {
+    public Object eval(final Reader reader, final ScriptContext context) throws ScriptException {
         return evaluate(read(reader), context);
     }
 
@@ -79,14 +81,14 @@ public final class GraalPyScriptEngine extends AbstractScriptEngine implements C
     }
 
     @Override
-    public CompiledScript compile(String script) throws ScriptException {
+    public CompiledScript compile(final String script) throws ScriptException {
         // Syntax errors must surface here. The compiled code itself is cached per pooled context,
         // so the CompiledScript only keeps the source and can be shared across threads.
-        PooledContext pooled = pool.borrow();
+        final PooledContext pooled = pool.borrow();
         boolean broken = false;
         try {
             pooled.prepare(script, DEFAULT_FILENAME);
-        } catch (PolyglotException e) {
+        } catch (final PolyglotException e) {
             broken = isFatal(e);
             throw toScriptException(e, DEFAULT_FILENAME);
         } finally {
@@ -96,43 +98,59 @@ public final class GraalPyScriptEngine extends AbstractScriptEngine implements C
     }
 
     @Override
-    public CompiledScript compile(Reader script) throws ScriptException {
+    public CompiledScript compile(final Reader script) throws ScriptException {
         return compile(read(script));
     }
 
-    Object evaluate(String script, ScriptContext scriptContext) throws ScriptException {
-        String filename = filename(scriptContext);
-        PooledContext pooled = pool.borrow();
+    Object evaluate(final String script, final ScriptContext scriptContext) throws ScriptException {
+        final String filename = filename(scriptContext);
+        final PooledContext pooled = pool.borrow();
         boolean broken = false;
         pooled.attachStreams(scriptContext.getWriter(), scriptContext.getErrorWriter(), scriptContext.getReader());
         try {
-            Value prepared = pooled.prepare(script, filename);
+            final Value prepared = pooled.prepare(script, filename);
 
-            Value names = prepared.getMember("names");
-            List<Object> keys = new ArrayList<>();
-            List<Object> values = new ArrayList<>();
+            final Value names = prepared.getMember("names");
+            final List<Object> keys = new ArrayList<>();
+            final List<Object> values = new ArrayList<>();
             for (long i = 0; i < names.getArraySize(); i++) {
-                String name = names.getArrayElement(i).asString();
-                int scope = scriptContext.getAttributesScope(name);
+                final String name = names.getArrayElement(i).asString();
+                final int scope = scriptContext.getAttributesScope(name);
                 if (scope != -1) {
                     keys.add(name);
                     values.add(scriptContext.getAttribute(name, scope));
                 }
             }
 
-            Value outcome = pooled.execute(prepared, keys.toArray(), values.toArray(), writeBack);
+            final Value outcome;
+            try {
+                outcome = pooled.execute(prepared, keys.toArray(), values.toArray(), writeBack);
+            } catch (final PolyglotException e) {
+                // The script's own error is what the caller needs; a failing flush must not replace it.
+                try {
+                    pooled.flushOutput();
+                } catch (final PolyglotException flushFailure) {
+                    e.addSuppressed(flushFailure);
+                }
+                throw e;
+            }
+            // After a successful script, a failing flush is the evaluation's error.
+            pooled.flushOutput();
 
-            Value changes = outcome.getArrayElement(2);
+            final Value changes = outcome.getArrayElement(2);
             for (long i = 0; i + 1 < changes.getArraySize(); i += 2) {
-                Object value = ValueConverter.toJava(changes.getArrayElement(i + 1));
-                // Guest objects without a Java representation belong to the pooled context and must
-                // not outlive this evaluation in the caller's bindings.
-                if (!(value instanceof Value)) {
-                    scriptContext.setAttribute(changes.getArrayElement(i).asString(), value, ScriptContext.ENGINE_SCOPE);
+                final String name = changes.getArrayElement(i).asString();
+                final Object value = ValueConverter.toJava(changes.getArrayElement(i + 1));
+                // Guest objects without a Java representation, at any depth, belong to the pooled
+                // context and must not outlive this evaluation in the caller's bindings.
+                if (ValueConverter.containsGuestValue(value)) {
+                    LOGGER.debug("Not writing back '{}' from {}: it holds Python objects without a Java form", name, filename);
+                } else {
+                    scriptContext.setAttribute(name, value, ScriptContext.ENGINE_SCOPE);
                 }
             }
             return outcome.getArrayElement(0).asBoolean() ? ValueConverter.toJava(outcome.getArrayElement(1)) : null;
-        } catch (PolyglotException e) {
+        } catch (final PolyglotException e) {
             broken = isFatal(e);
             throw toScriptException(e, filename);
         } finally {
@@ -140,35 +158,36 @@ public final class GraalPyScriptEngine extends AbstractScriptEngine implements C
         }
     }
 
-    private static boolean isFatal(PolyglotException e) {
+    private static boolean isFatal(final PolyglotException e) {
         return e.isCancelled() || e.isExit() || e.isInternalError() || e.isResourceExhausted() || e.isInterrupted();
     }
 
-    private static ScriptException toScriptException(PolyglotException e, String filename) {
+    private static ScriptException toScriptException(final PolyglotException e, final String filename) {
         if (e.isHostException()) {
             // Keep Java exceptions thrown by called host code as the cause, so callers can react to
             // them (CIB seven looks for a BpmnError in the cause chain).
-            ScriptException exception = new ScriptException(e.asHostException().toString());
+            final ScriptException exception = new ScriptException(e.asHostException().toString());
             exception.initCause(e.asHostException());
             return exception;
         }
-        int line = lineNumber(e, filename);
-        ScriptException exception = new ScriptException(e.getMessage(), filename, line);
+        final int line = lineNumber(e, filename);
+        final ScriptException exception = new ScriptException(e.getMessage(), filename, line);
         exception.initCause(e);
         return exception;
     }
 
-    private static int lineNumber(PolyglotException e, String filename) {
-        Value guest = e.getGuestObject();
-        if (guest != null && e.isGuestException() && guest.hasMember("lineno")) {
-            // SyntaxError raised by compile() carries the position of the offending token.
-            Value lineno = guest.getMember("lineno");
+    private static int lineNumber(final PolyglotException e, final String filename) {
+        final Value guest = e.getGuestObject();
+        if (e.isSyntaxError() && guest != null && guest.hasMember("lineno")) {
+            // SyntaxError raised by compile() carries the position of the offending token. Other
+            // exceptions may have a lineno of their own (JSONDecodeError: the document's line).
+            final Value lineno = guest.getMember("lineno");
             if (lineno != null && lineno.fitsInInt()) {
                 return lineno.asInt();
             }
         }
-        for (PolyglotException.StackFrame frame : e.getPolyglotStackTrace()) {
-            SourceSection location = frame.getSourceLocation();
+        for (final PolyglotException.StackFrame frame : e.getPolyglotStackTrace()) {
+            final SourceSection location = frame.getSourceLocation();
             if (frame.isGuestFrame() && location != null && location.getSource().getName().equals(filename)) {
                 return location.getStartLine();
             }
@@ -176,21 +195,21 @@ public final class GraalPyScriptEngine extends AbstractScriptEngine implements C
         return -1;
     }
 
-    private static String filename(ScriptContext context) {
-        Object filename = context.getAttribute(ScriptEngine.FILENAME);
+    private static String filename(final ScriptContext context) {
+        final Object filename = context.getAttribute(ScriptEngine.FILENAME);
         return filename != null ? filename.toString() : DEFAULT_FILENAME;
     }
 
-    private static String read(Reader reader) throws ScriptException {
+    private static String read(final Reader reader) throws ScriptException {
         try {
-            StringBuilder builder = new StringBuilder();
-            char[] buffer = new char[8192];
+            final StringBuilder builder = new StringBuilder();
+            final char[] buffer = new char[8192];
             int n;
             while ((n = reader.read(buffer)) != -1) {
                 builder.append(buffer, 0, n);
             }
             return builder.toString();
-        } catch (IOException e) {
+        } catch (final IOException e) {
             throw (ScriptException) new ScriptException("Failed to read script: " + e.getMessage()).initCause(e);
         }
     }

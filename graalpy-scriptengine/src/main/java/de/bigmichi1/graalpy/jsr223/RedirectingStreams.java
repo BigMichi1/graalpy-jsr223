@@ -12,6 +12,8 @@ import java.nio.charset.CharsetEncoder;
 import java.nio.charset.CoderResult;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Byte streams handed to a polyglot context once, at build time, which forward to the
@@ -19,6 +21,8 @@ import java.nio.charset.StandardCharsets;
  * context. GraalPy writes UTF-8.
  */
 final class RedirectingStreams {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(RedirectingStreams.class);
 
     private final WriterStream out = new WriterStream();
     private final WriterStream err = new WriterStream();
@@ -36,31 +40,32 @@ final class RedirectingStreams {
         return in;
     }
 
-    void attach(Writer outWriter, Writer errWriter, Reader reader) {
+    void attach(final Writer outWriter, final Writer errWriter, final Reader reader) {
         out.target = outWriter;
         err.target = errWriter;
         in.attach(reader);
     }
 
+    /** Flushes and detaches the evaluation's writers; never throws, failures are logged. */
     void detach() {
-        out.flushQuietly();
-        err.flushQuietly();
-        out.target = null;
-        err.target = null;
+        out.detach("stdout");
+        err.detach("stderr");
         in.attach(null);
     }
 
-    /** Decodes UTF-8 bytes into the current target writer; output without a target is dropped. */
+    /**
+     * Decodes UTF-8 bytes into the current target writer. Output written while no evaluation is
+     * attached (for example by a thread a script left running) has no reader and is dropped.
+     */
     private static final class WriterStream extends OutputStream {
-        private final CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder()
-                .onMalformedInput(CodingErrorAction.REPLACE)
-                .onUnmappableCharacter(CodingErrorAction.REPLACE);
+
+        private final CharsetDecoder decoder = StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPLACE).onUnmappableCharacter(CodingErrorAction.REPLACE);
         private final ByteBuffer bytes = ByteBuffer.allocate(8192);
         private final CharBuffer chars = CharBuffer.allocate(8192);
         private volatile Writer target;
 
         @Override
-        public synchronized void write(int b) throws IOException {
+        public synchronized void write(final int b) throws IOException {
             if (!bytes.hasRemaining()) {
                 drain();
             }
@@ -68,32 +73,39 @@ final class RedirectingStreams {
         }
 
         @Override
-        public synchronized void write(byte[] b, int off, int len) throws IOException {
-            while (len > 0) {
+        public synchronized void write(final byte[] b, final int off, final int len) throws IOException {
+            int position = off;
+            final int end = off + len;
+            while (position < end) {
                 if (!bytes.hasRemaining()) {
                     drain();
                 }
-                int n = Math.min(len, bytes.remaining());
-                bytes.put(b, off, n);
-                off += n;
-                len -= n;
+                final int n = Math.min(end - position, bytes.remaining());
+                bytes.put(b, position, n);
+                position += n;
             }
         }
 
         @Override
         public synchronized void flush() throws IOException {
             drain();
-            Writer writer = target;
+            final Writer writer = target;
             if (writer != null) {
                 writer.flush();
             }
         }
 
-        void flushQuietly() {
+        synchronized void detach(final String name) {
             try {
                 flush();
-            } catch (IOException ignored) {
-                // The script has finished; there is nobody left to report this to.
+            } catch (final IOException | RuntimeException e) {
+                // The script itself finished; a failing writer must not replace its outcome.
+                LOGGER.warn("Script {} could not be flushed to the ScriptContext writer; its tail is lost", name, e);
+            } finally {
+                target = null;
+                // An incomplete UTF-8 sequence must not leak into the next evaluation's output.
+                bytes.clear();
+                decoder.reset();
             }
         }
 
@@ -104,7 +116,7 @@ final class RedirectingStreams {
                 // Underflow leaves an incomplete multi-byte sequence in the buffer for the next write.
                 result = decoder.decode(bytes, chars, false);
                 chars.flip();
-                Writer writer = target;
+                final Writer writer = target;
                 if (writer != null && chars.hasRemaining()) {
                     writer.write(chars.array(), chars.position(), chars.remaining());
                 }
@@ -116,15 +128,19 @@ final class RedirectingStreams {
 
     /** Encodes characters of the current reader as UTF-8; without a reader the stream is at EOF. */
     private static final class ReaderStream extends InputStream {
-        private final CharsetEncoder encoder = StandardCharsets.UTF_8.newEncoder()
-                .onMalformedInput(CodingErrorAction.REPLACE)
-                .onUnmappableCharacter(CodingErrorAction.REPLACE);
+
+        private final CharsetEncoder encoder = StandardCharsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPLACE).onUnmappableCharacter(CodingErrorAction.REPLACE);
         private final CharBuffer chars = CharBuffer.allocate(4096);
         private final ByteBuffer bytes = ByteBuffer.allocate(16384);
         private Reader reader;
         private boolean eof;
 
-        synchronized void attach(Reader newReader) {
+        ReaderStream() {
+            // Until an evaluation attaches its reader, the stream is empty and at end of input.
+            attach(null);
+        }
+
+        synchronized void attach(final Reader newReader) {
             reader = newReader;
             eof = newReader == null;
             chars.clear().flip();
@@ -134,13 +150,13 @@ final class RedirectingStreams {
 
         @Override
         public synchronized int read() throws IOException {
-            byte[] one = new byte[1];
-            int n = read(one, 0, 1);
+            final byte[] one = new byte[1];
+            final int n = read(one, 0, 1);
             return n <= 0 ? -1 : one[0] & 0xff;
         }
 
         @Override
-        public synchronized int read(byte[] b, int off, int len) throws IOException {
+        public synchronized int read(final byte[] b, final int off, final int len) throws IOException {
             if (len == 0) {
                 return 0;
             }
@@ -150,14 +166,14 @@ final class RedirectingStreams {
                 }
                 fill();
             }
-            int n = Math.min(len, bytes.remaining());
+            final int n = Math.min(len, bytes.remaining());
             bytes.get(b, off, n);
             return n;
         }
 
         private void fill() throws IOException {
             chars.compact();
-            int read = reader.read(chars);
+            final int read = reader.read(chars);
             chars.flip();
             if (read < 0) {
                 eof = true;

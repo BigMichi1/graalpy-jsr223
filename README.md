@@ -16,7 +16,8 @@ way scripts and bindings work familiar to people coming from Jython.
 
 Documentation:
 
-- [docs/design.md](docs/design.md): architecture, design decisions, JSR-223 interface coverage, prior art
+- [docs/design.md](docs/design.md): architecture, design decisions, JSR-223 interface coverage, prior art,
+  tests, performance, memory, and the known GraalPy defect
 - [docs/cibseven.md](docs/cibseven.md): using the engine in CIB seven (BPMN, DMN, Spin, configuration)
 
 ## Quick start
@@ -54,7 +55,20 @@ mise install
 ./gradlew build
 ```
 
-`./gradlew build` compiles both modules and runs the unit and CIB seven integration tests.
+`./gradlew build` compiles both modules and runs the unit and CIB seven integration tests. It fails if a
+module's tests cover less than 90 % of its lines.
+
+Outside the build, because they take minutes:
+
+- `./gradlew :graalpy-scriptengine:jmh` runs the JMH benchmarks (see
+  [Performance](docs/design.md#performance)).
+- `./gradlew :graalpy-scriptengine:leakCheck` runs the heap growth check (see
+  [Memory](docs/design.md#memory)).
+
+GraalPy 25.1 and later lose a script's error, or its line number, when the exception passes a Python
+frame with an exception handler. The engine works around this. See
+[Known GraalPy defect](docs/design.md#known-graalpy-defect), reported as
+[oracle/graalpython#1186](https://github.com/oracle/graalpython/issues/1186).
 
 ## Requirements and runtime notes
 

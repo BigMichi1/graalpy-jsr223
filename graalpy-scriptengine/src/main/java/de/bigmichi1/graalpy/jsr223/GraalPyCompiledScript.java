@@ -17,13 +17,13 @@ final class GraalPyCompiledScript extends CompiledScript {
     private final GraalPyScriptEngine engine;
     private final String source;
 
-    GraalPyCompiledScript(GraalPyScriptEngine engine, String source) {
+    GraalPyCompiledScript(final GraalPyScriptEngine engine, final String source) {
         this.engine = engine;
         this.source = source;
     }
 
     @Override
-    public Object eval(ScriptContext context) throws ScriptException {
+    public Object eval(final ScriptContext context) throws ScriptException {
         return engine.evaluate(source, context);
     }
 

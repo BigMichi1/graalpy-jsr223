@@ -1,14 +1,10 @@
 package de.bigmichi1.graalpy.jsr223;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
+import java.lang.ref.WeakReference;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.Engine;
 import org.graalvm.polyglot.Source;
@@ -40,31 +36,45 @@ final class ContextPool implements AutoCloseable {
     private final GraalPyEngineOptions options;
     private final Source supportSource;
     private final ConcurrentLinkedDeque<PooledContext> idle = new ConcurrentLinkedDeque<>();
-    private final ThreadLocal<PooledContext> lastUsed = new ThreadLocal<>();
+    /**
+     * The context each thread used last. Weak, so that a long-lived thread (a job executor's) does
+     * not keep a retired context, and through it a closed engine, reachable.
+     */
+    private final ThreadLocal<WeakReference<PooledContext>> lastUsed = new ThreadLocal<>();
     private final AtomicInteger idleCount = new AtomicInteger();
     private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicBoolean engineClosed = new AtomicBoolean();
+    /** Contexts currently borrowed; the engine is closed only once none is left. */
+    private final AtomicInteger borrowed = new AtomicInteger();
 
-    ContextPool(Engine engine, GraalPyEngineOptions options) {
+    ContextPool(final Engine engine, final GraalPyEngineOptions options) {
         this.engine = engine;
         this.options = options;
         this.supportSource = loadSupportSource();
     }
 
     PooledContext borrow() {
-        if (closed.get()) {
-            throw new IllegalStateException("GraalPy script engine factory has been closed");
+        borrowed.incrementAndGet();
+        try {
+            if (closed.get()) {
+                throw new IllegalStateException("GraalPy script engine factory has been closed");
+            }
+            final WeakReference<PooledContext> reference = lastUsed.get();
+            final PooledContext preferred = reference == null ? null : reference.get();
+            if (preferred != null && idle.remove(preferred)) {
+                idleCount.decrementAndGet();
+                return preferred;
+            }
+            final PooledContext context = idle.pollFirst();
+            if (context != null) {
+                idleCount.decrementAndGet();
+                return context;
+            }
+            return create();
+        } catch (final RuntimeException e) {
+            returned();
+            throw e;
         }
-        PooledContext preferred = lastUsed.get();
-        if (preferred != null && idle.remove(preferred)) {
-            idleCount.decrementAndGet();
-            return preferred;
-        }
-        PooledContext context = idle.pollFirst();
-        if (context != null) {
-            idleCount.decrementAndGet();
-            return context;
-        }
-        return create();
     }
 
     /**
@@ -73,30 +83,55 @@ final class ContextPool implements AutoCloseable {
      * @param broken {@code true} if the context must not be reused (cancelled, exited, internal
      *               error)
      */
-    void release(PooledContext context, boolean broken) {
+    void release(final PooledContext context, final boolean broken) {
+        // Detaching flushes the evaluation's writers. It never throws (failures are logged), so the
+        // context below is always either pooled or closed.
         context.detachStreams();
-        boolean retire = broken
-                || closed.get()
-                || (options.maxEvaluationsPerContext() > 0
-                        && context.evaluations() >= options.maxEvaluationsPerContext());
-        if (!retire && idleCount.incrementAndGet() <= options.maxIdleContexts()) {
-            lastUsed.set(context);
-            idle.addFirst(context);
-            return;
+        final boolean retire = broken || closed.get() || (options.maxEvaluationsPerContext() > 0 && context.evaluations() >= options.maxEvaluationsPerContext());
+        try {
+            if (!retire && idleCount.incrementAndGet() <= options.maxIdleContexts()) {
+                lastUsed.set(new WeakReference<>(context));
+                idle.addFirst(context);
+                // close() may have drained the idle list between the check above and the add.
+                if (closed.get() && idle.remove(context)) {
+                    idleCount.decrementAndGet();
+                    context.close();
+                }
+                return;
+            }
+            if (!retire) {
+                idleCount.decrementAndGet();
+            }
+            final WeakReference<PooledContext> reference = lastUsed.get();
+            if (reference != null && reference.get() == context) {
+                lastUsed.remove();
+            }
+            context.close();
+        } finally {
+            returned();
         }
-        if (!retire) {
-            idleCount.decrementAndGet();
+    }
+
+    private void returned() {
+        if (borrowed.decrementAndGet() == 0 && closed.get()) {
+            closeEngine();
         }
-        if (lastUsed.get() == context) {
-            lastUsed.remove();
+    }
+
+    private void closeEngine() {
+        if (engineClosed.compareAndSet(false, true)) {
+            engine.close();
         }
-        context.close();
     }
 
     int idleContexts() {
         return idleCount.get();
     }
 
+    /**
+     * Closes the idle contexts at once. Borrowed contexts finish their evaluation and are closed when
+     * returned; the shared engine is closed with the last of them.
+     */
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
@@ -105,44 +140,40 @@ final class ContextPool implements AutoCloseable {
                 idleCount.decrementAndGet();
                 context.close();
             }
+            if (borrowed.get() == 0) {
+                closeEngine();
+            }
         }
     }
 
     private PooledContext create() {
-        RedirectingStreams streams = new RedirectingStreams();
-        Context.Builder builder = Context.newBuilder(LANGUAGE)
-                .engine(engine)
-                .allowHostAccess(options.hostAccess().hostAccess())
-                .allowHostClassLookup(options.hostClassFilter())
-                .allowIO(options.allowIO() ? IOAccess.ALL : IOAccess.NONE)
-                .allowCreateThread(options.allowCreateThread())
-                .allowNativeAccess(options.allowNativeAccess())
-                .out(streams.out())
-                .err(streams.err())
-                .in(streams.in());
-        for (Map.Entry<String, String> option : options.polyglotOptions().entrySet()) {
+        final RedirectingStreams streams = new RedirectingStreams();
+        final Context.Builder builder = Context.newBuilder(LANGUAGE)
+            .engine(engine)
+            .allowHostAccess(options.hostAccess().hostAccess())
+            .allowHostClassLookup(options.hostClassFilter())
+            .allowIO(options.allowIO() ? IOAccess.ALL : IOAccess.NONE)
+            .allowCreateThread(options.allowCreateThread())
+            .allowNativeAccess(options.allowNativeAccess())
+            .out(streams.out())
+            .err(streams.err())
+            .in(streams.in());
+        for (final Map.Entry<String, String> option : options.polyglotOptions().entrySet()) {
             builder.option(option.getKey(), option.getValue());
         }
-        Context context = builder.build();
+        final Context context = builder.build();
         try {
-            Value api = context.eval(supportSource).execute(options.compilationCacheSize());
-            return new PooledContext(context, streams, api.getHashValue("prepare"), api.getHashValue("execute"));
-        } catch (RuntimeException e) {
+            final Value api = context.eval(supportSource).execute(options.compilationCacheSize());
+            return new PooledContext(context, streams, api.getHashValue("prepare"), api.getHashValue("execute"), api.getHashValue("flush"));
+        } catch (final RuntimeException e) {
             context.close(true);
             throw e;
         }
     }
 
     private static Source loadSupportSource() {
-        try (InputStream in = ContextPool.class.getResourceAsStream(SUPPORT_RESOURCE)) {
-            if (in == null) {
-                throw new IllegalStateException("Missing classpath resource " + SUPPORT_RESOURCE);
-            }
-            String code = new String(in.readAllBytes(), StandardCharsets.UTF_8);
-            // Cached sources let the shared engine reuse the parsed support module across contexts.
-            return Source.newBuilder(LANGUAGE, code, SUPPORT_RESOURCE).cached(true).build();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        final String code = ClasspathResources.readUtf8(ContextPool.class, SUPPORT_RESOURCE);
+        // Cached sources let the shared engine reuse the parsed support module across contexts.
+        return Source.newBuilder(LANGUAGE, code, SUPPORT_RESOURCE).cached(true).buildLiteral();
     }
 }
