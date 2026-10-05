@@ -104,3 +104,7 @@ Configure the engine with `graalpy.jsr223.*` system properties, or in code with
 | `graalpy.jsr223.option.<name>` | | Raw polyglot option, e.g. `graalpy.jsr223.option.python.PythonPath=/opt/scripts` |
 
 See [docs/design.md](docs/design.md#security) for the security implications of these defaults.
+
+## License
+
+Licensed under the [Apache License, Version 2.0](LICENSE).
